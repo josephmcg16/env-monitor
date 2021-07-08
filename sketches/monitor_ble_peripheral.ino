@@ -25,10 +25,10 @@
 
 // BLE Objects (MTU : 23 bytes)
 BLEService monitorService("19B10000-E8F2-537E-4F6C-D104768A1214");
-BLECharacteristic tagCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify , 23);   // env_monitor label
-BLEFloatCharacteristic tempCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);             // hyt939 sensor temperature
-BLEFloatCharacteristic humidCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);            // hyt939 sensor humidity
-BLEFloatCharacteristic pressCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);            // dps368 sensor pressure
+BLECharacteristic tagCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite | BLENotify , 23);   // env_monitor label, 23 byte char array
+BLEFloatCharacteristic tempCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);             // hyt939 sensor temperature, float32
+BLEFloatCharacteristic humidCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);            // hyt939 sensor humidity, float32
+BLEFloatCharacteristic pressCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLENotify);            // dps368 sensor pressure, float32
 
 // dps368 i2c library objects
 Dps368 Dps368PressSensor = Dps368();
@@ -45,7 +45,7 @@ void setup() {
 
   // init Serial and I2C
   Serial.begin(9600);
-  //while (!Serial);  // uncomment to wait for serial port for program to run
+  //while (!Serial);  // uncomment to wait for serial port for program to run (for debugging)
 
   Wire.begin();
   Dps368PressSensor.begin(Wire);
@@ -83,7 +83,7 @@ void setup() {
   // init SD
   if (!SD.begin(CSPin)) {
     Serial.println("Card failed, or not present.");
-    while (1);
+    while (!SD.begin(CSPin));
   }
 
   // init RTC
@@ -165,44 +165,41 @@ void loop() {
       timestampString += String(now.hour(), DEC); timestampString += ":"; timestampString += String(now.minute(), DEC);
       timestampString += ":"; timestampString += String(now.second(), DEC);
 
+      // get the i2c data
+      hyt_ic2(humid, temp);  // updates value of temp and humid
+      ret = Dps368PressSensor.measurePressureOnce(pressure, oversampling);
+      if (ret != 0) {
+        // Something has went wrong
+        Serial.print("FAIL! ret = ");
+        Serial.println(ret);
+        return;
+      }
+
       // if the sd card file does not yet exist, write the headers as the first line
-      if (!SD.exists(filename)) {
+      while (!SD.exists(filename)) {
+        Serial.print("Writing new file to '");
+        Serial.print(filename);
+        Serial.println("'"); Serial.println();
         dataString = "timestamp,";
         dataString += "relhumid";    dataString += " (%),";
         dataString += "temperature"; dataString += " (degC),";
         dataString += "pressure";    dataString += " (Pa)";
         dataFile = SD.open(filename, FILE_WRITE);
+        // check file is available
         if (dataFile) {
           dataFile.println(dataString);
           dataFile.close();
         }
         else {
-          Serial.println(F("error opening file..."));
+          Serial.println(F("error opening file. re-init SD...")); Serial.println();
+          while (1) {
+            // try to re-init SD
+            if (SD.begin(CSPin)) {
+              return;  // break loop if the SD is initialized
+            }
+          }
         }
       }
-
-      // get i2c data from the sensors
-      hyt_ic2(humid, temp);
-      ret = Dps368PressSensor.measurePressureOnce(pressure, oversampling);
-      if (ret != 0) {
-        // Something has went wrong. Check example code and lib for more info.
-        Serial.print("FAIL! ret = ");
-        Serial.println(ret);
-        while (1);
-      }
-
-      // write to the BLE characteristics
-      tempCharacteristic.writeValue(temp);
-      humidCharacteristic.writeValue(humid);
-      pressCharacteristic.writeValue(pressure);
-
-      // print to the serial monitor for debugging
-      Serial.print(F("RTC Timestamp       : ")); Serial.println(timestampString);
-      Serial.print(F("Humidity (%)        : ")); Serial.println(humid);
-      Serial.print(F("Temperature (degC)  : ")); Serial.println(temp);
-      Serial.print(F("Pressure (Pa)       : ")); Serial.println(pressure);
-      Serial.println();
-
 
       // and write csv line to the SD card
       dataString = timestampString;
@@ -216,8 +213,26 @@ void loop() {
         dataFile.close();
       }
       else {
-        Serial.println(F("error opening file..."));
+        Serial.println(F("error opening file...")); Serial.println();
+        while (1) {
+          // try to re-init SD
+          if (SD.begin(CSPin)) {
+            return;  // break loop if the SD is initialized
+          }
+        }
       }
+
+      // print to the serial monitor for debugging
+      Serial.print(F("RTC Timestamp       : ")); Serial.println(timestampString);
+      Serial.print(F("Humidity (%)        : ")); Serial.println(humid);
+      Serial.print(F("Temperature (degC)  : ")); Serial.println(temp);
+      Serial.print(F("Pressure (Pa)       : ")); Serial.println(pressure);
+      Serial.println();
+
+      // write to the BLE characteristics
+      tempCharacteristic.writeValue(temp);
+      humidCharacteristic.writeValue(humid);
+      pressCharacteristic.writeValue(pressure);
 
       // wait 2 seconds before repeating the loop
       delay(2000);
@@ -227,9 +242,10 @@ void loop() {
     // when the central disconnects, print:
     Serial.print(F("Disconnected from central: "));
     Serial.println(central.address());
+    BLE.advertise();
   }
 
-  // otherwise
+  // otherwise, just write to the SD card (same process without ble)
   else {
     // build a string of the current timestamp in YYYY/MM/DD HH:MM:SS format for the csv
     DateTime now = rtc.now();
@@ -238,40 +254,41 @@ void loop() {
     timestampString += String(now.hour(), DEC); timestampString += ":"; timestampString += String(now.minute(), DEC);
     timestampString += ":"; timestampString += String(now.second(), DEC);
 
-    // if the sd card file does not yet exist, write the headers as the first line
-    if (!SD.exists(filename)) {
-      dataString = "timestamp,";
-      dataString += "relhumid";    dataString += " (%),";
-      dataString += "temperature"; dataString += " (degC),";
-      dataString += "pressure";    dataString += " (Pa)";
-
-
-      dataFile = SD.open(filename, FILE_WRITE);
-      if (dataFile) {
-        dataFile.println(dataString);
-        dataFile.close();
-      }
-      else {
-        Serial.println(F("error opening file..."));
-      }
-    }
-
     // get the i2c data
     hyt_ic2(humid, temp);  // updates value of temp and humid
     ret = Dps368PressSensor.measurePressureOnce(pressure, oversampling);
     if (ret != 0) {
       // Something has went wrong
-      Serial.print("FAIL! ret = ");
+      Serial.print("Pressure sensor fail (Dps368)! ret = ");
       Serial.println(ret);
-      while (1);
+      return;
     }
 
-    // print to the serial monitor for debugging
-    Serial.print(F("RTC Timestamp       : ")); Serial.println(timestampString);
-    Serial.print(F("Humidity (%)        : ")); Serial.println(humid);
-    Serial.print(F("Temperature (degC)  : ")); Serial.println(temp);
-    Serial.print(F("Pressure (Pa)       : ")); Serial.println(pressure);
-    Serial.println();
+    // if the sd card file does not yet exist, write the headers as the first line
+    while (!SD.exists(filename)) {
+      Serial.print("Writing new file to '");
+      Serial.print(filename);
+      Serial.println("'"); Serial.println();
+      dataString = "timestamp,";
+      dataString += "relhumid";    dataString += " (%),";
+      dataString += "temperature"; dataString += " (degC),";
+      dataString += "pressure";    dataString += " (Pa)";
+      dataFile = SD.open(filename, FILE_WRITE);
+      // check file is available
+      if (dataFile) {
+        dataFile.println(dataString);
+        dataFile.close();
+      }
+      else {
+        Serial.println(F("error opening file. re-init SD...")); Serial.println();
+        while (1) {
+          // try to re-init SD
+          if (SD.begin(CSPin)) {
+            return;  // break loop if the SD is initialized
+          }
+        }
+      }
+    }
 
     // and write csv line to the SD card
     dataString = timestampString;
@@ -285,8 +302,21 @@ void loop() {
       dataFile.close();
     }
     else {
-      Serial.println(F("error opening file..."));
+      Serial.println(F("error opening file...")); Serial.println();
+      while (1) {
+        // try to re-init SD
+        if (SD.begin(CSPin)) {
+          return;  // break loop if the SD is initialized
+        }
+      }
     }
+
+    // print to the serial monitor for debugging
+    Serial.print(F("RTC Timestamp       : ")); Serial.println(timestampString);
+    Serial.print(F("Humidity (%)        : ")); Serial.println(humid);
+    Serial.print(F("Temperature (degC)  : ")); Serial.println(temp);
+    Serial.print(F("Pressure (Pa)       : ")); Serial.println(pressure);
+    Serial.println();
     delay(2000);
   }
 }
