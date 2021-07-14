@@ -12,6 +12,10 @@
 #include <ArduinoBLE.h>
 
 #define service_UUID "19B10000-E8F2-537E-4F6C-D104768A1214"
+#define tag_UUID "19B10001-E8F2-537E-4F6C-D104768A1214"
+#define temp_UUID "19B10002-E8F2-537E-4F6C-D104768A1214"
+#define humid_UUID "19B10003-E8F2-537E-4F6C-D104768A1214"
+#define press_UUID "19B10004-E8F2-537E-4F6C-D104768A1214"
 
 void setup() {
   Serial.begin(9600);
@@ -27,45 +31,6 @@ void setup() {
   Serial.println("' ...");
 }
 
-void loop() {
-
-  // check if a peripheral has been discovered
-  BLEDevice peripheral = BLE.available();
-
-  if (peripheral)
-  {
-    // found a peripheral
-    Serial.print(F("Found "));
-    Serial.print(peripheral.address());
-    Serial.print(F(" '"));
-    Serial.print(peripheral.localName());
-    Serial.print(F("' "));
-    Serial.print(peripheral.advertisedServiceUuid());
-    Serial.println();
-
-    if (peripheral.localName() != "Arduino")
-    {
-      return;
-    }
-
-    // stop scanning
-    BLE.stopScan();
-
-    // start monitoring
-    get_data_and_print(peripheral);
-    // periperal disconnected, start scanning again
-    Serial.println("Peripheral disconnected");
-    Serial.println();
-    Serial.print("Re-Scanning for UUID: '");
-    Serial.print(service_UUID);
-    Serial.println("' ...");
-    Serial.println();
-  }
-  // periperal disconnected, start scanning again
-  BLE.scanForUuid("19B10000-E8F2-537E-4F6C-D104768A1214");
-
-}
-
 void get_data_and_print(BLEDevice peripheral) {
   // connect to the peripheral
   Serial.println(F("Connecting ..."));
@@ -78,7 +43,7 @@ void get_data_and_print(BLEDevice peripheral) {
 
   // discover peripheral attributes
   Serial.println(F("Discovering service ... (this can take up to 2 mins)"));
-  if (peripheral.discoverService("19B10000-E8F2-537E-4F6C-D104768A1214")) {
+  if (peripheral.discoverService(service_UUID)) {
     Serial.println(F("Service discovered."));
   } else {
     Serial.println(F("Attribute discovery failed."));
@@ -150,6 +115,11 @@ void get_data_and_print(BLEDevice peripheral) {
   }
 
   while (peripheral.connected()) {
+    // wait for serial command
+    while (Serial.available() == 0);
+    String tag = Serial.readStringUntil('\n');
+    delay(50);
+
     // check if sensor values are updated
     if (tempCharacteristic.valueUpdated()
         && humidCharacteristic.valueUpdated()
@@ -169,13 +139,52 @@ void get_data_and_print(BLEDevice peripheral) {
       float pressure = *(float *)&press_buffer;
 
       // and print to serial
-      Serial.print(F("Temperature (degC)  : "));
-      Serial.println(temp);
-      Serial.print(F("Humidity    (%)     : "));
+      Serial.println("timestamp");
+      Serial.print(tag); Serial.println("_relhumid");
       Serial.println(humid);
-      Serial.print(F("Pressure    (Pa)    : "));
+      Serial.println("%");
+      Serial.print(tag); Serial.println("_temp");
+      Serial.println(temp);
+      Serial.println("degC");
+      Serial.print(tag); Serial.println("_pressure");
       Serial.println(pressure);
+      Serial.println("Pa");
       Serial.println();
     }
   }
+}
+
+void loop() {
+
+  // check if a peripheral has been discovered
+  BLEDevice peripheral = BLE.available();
+
+  if (peripheral)
+  {
+    // found a peripheral
+    Serial.println(F("Device Found: "));
+    Serial.print(F("Address - "));
+    Serial.println(peripheral.address());
+    Serial.print(F("Device name - "));
+    Serial.print(F(" '"));
+    Serial.print(peripheral.localName());
+    Serial.print(F("' "));
+    Serial.println();
+
+    // stop scanning
+    BLE.stopScan();
+
+    // start monitoring
+    get_data_and_print(peripheral);
+    // periperal disconnected, start scanning again
+    Serial.println("Peripheral disconnected");
+    Serial.println();
+    Serial.print("Re-Scanning for UUID: '");
+    Serial.print(service_UUID);
+    Serial.println("' ...");
+    Serial.println();
+  }
+  // periperal disconnected, start scanning again
+  BLE.scanForUuid("19B10000-E8F2-537E-4F6C-D104768A1214");
+
 }
