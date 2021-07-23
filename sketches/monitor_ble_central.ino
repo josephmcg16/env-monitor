@@ -1,190 +1,167 @@
 /*
-  Enviromental Monitor
-  Script which programs a Nano 33 BLE Sense as a BLE Central Data Logger
-  Recieves data from another Nano 33 BLE Sense over a GATT service with 4 characteristics.
+  Enviromental Monitor central sketch
+  19/07/2021
 
-  tagCharacteristic   - Represents the peripheral device label name. Read/ Write/ Notify. Written by the central to the peripheral. (different to the BLE name)
-  tempCharacterstic   - Represents float value of the current temperature from the HYT 939 temp humidity sensor.
-  humidCharacteristic - Represents float value of the current relative humidity from the HYT 939 temp humidity sensor.
-  pressCharacteristic - Represents float value of the current air pressure from the HYT 939 temp humidity sensor.
+  Author: Joseph McGovern
+
+  Reads data from an environment monitor over BLE (peripheral) and prints to Serial.
+
+  Data recieved over GATT protocol.
+
+  GATT protocol contains a GATT service with a characteristic.
+  Characteristic recieves 23 bytes of data.
+
+  11 bytes represent device tag (peripheralLocalName)
+
+  The other 3 x 4 bytes correspond to 32 bit floating points.
+
+
 */
 
 #include <ArduinoBLE.h>
 
-#define service_UUID "19B10000-E8F2-537E-4F6C-D104768A1214"
-#define tag_UUID "19B10001-E8F2-537E-4F6C-D104768A1214"
-#define temp_UUID "19B10002-E8F2-537E-4F6C-D104768A1214"
-#define humid_UUID "19B10003-E8F2-537E-4F6C-D104768A1214"
-#define press_UUID "19B10004-E8F2-537E-4F6C-D104768A1214"
+#define deviceLocalName "Arduino_MASTER"
+
+// define UUIDs here (defined in documentation, 'arduino_ble_uuids.doc')
+#define serviceUUID "19B10000-E8F2-537E-4F6C-D104768A1214"
+#define sensorsUUID "19B10001-E8F2-537E-4F6C-D104768A1214"
 
 void setup() {
+  // init Serial
   Serial.begin(9600);
-  while (!Serial); // wait for ser port to open
+  while (!Serial); // wait for Serial port to open
 
   // init BLE
-  BLE.begin();
-
-  // scan for peripherals
-  BLE.scanForUuid(service_UUID);
-  Serial.print("Scanning for UUID: '");
-  Serial.print(service_UUID);
-  Serial.println("' ...");
-}
-
-void get_data_and_print(BLEDevice peripheral) {
-  // connect to the peripheral
-  Serial.println(F("Connecting ..."));
-  if (peripheral.connect()) {
-    Serial.println(F("Connected."));
-  } else {
-    Serial.println(F("Failed to Connect"));
-    return;
+  if (!BLE.begin()) {
+    Serial.println("starting BLE failed!");
+    while (1);
   }
 
-  // discover peripheral attributes
-  Serial.println(F("Discovering service ... (this can take up to 2 mins)"));
-  if (peripheral.discoverService(service_UUID)) {
-    Serial.println(F("Service discovered."));
-  } else {
-    Serial.println(F("Attribute discovery failed."));
-    peripheral.disconnect();
-    return;
-  }
+  BLE.scanForUuid(serviceUUID);
 
-  // retrive the service characteristics
-  //BLECharacteristic tagCharacteristic = peripheral.characteristic("19B10001-E8F2-537E-4F6C-D104768A1214");
-  BLECharacteristic tempCharacteristic = peripheral.characteristic("19B10002-E8F2-537E-4F6C-D104768A1214");
-  BLECharacteristic humidCharacteristic = peripheral.characteristic("19B10003-E8F2-537E-4F6C-D104768A1214");
-  BLECharacteristic pressCharacteristic = peripheral.characteristic("19B10004-E8F2-537E-4F6C-D104768A1214");
-
-  // subscribe to the tempCharacteristic
-  Serial.println(F("Subscribing to temperature characteristic ..."));
-  if (!tempCharacteristic) {
-    Serial.println(F("no temperature characteristic found!"));
-    peripheral.disconnect();
-    return;
-  } else if (!tempCharacteristic.canSubscribe()) {
-    Serial.println(F("temperature characteristic is not subscribable!"));
-    peripheral.disconnect();
-    return;
-  } else if (!tempCharacteristic.subscribe()) {
-    Serial.println(F("subscription failed!"));
-    peripheral.disconnect();
-    return;
-  } else {
-    Serial.println(F("Subscribed."));
-    Serial.println();
-  }
-
-  // subscribe to the humidCharacteristic
-  Serial.println(F("Subscribing to humidity characteristic ..."));
-  if (!humidCharacteristic) {
-    Serial.println(F("no humidity characteristic found!"));
-    peripheral.disconnect();
-    return;
-  } else if (!humidCharacteristic.canSubscribe()) {
-    Serial.println(F("humidity characteristic is not subscribable!"));
-    peripheral.disconnect();
-    return;
-  } else if (!humidCharacteristic.subscribe()) {
-    Serial.println(F("subscription failed!"));
-    peripheral.disconnect();
-    return;
-  } else {
-    Serial.println("Subscribed.");
-    Serial.println();
-  }
-
-  // subscribe to the pressCharacteristic
-  Serial.println(F("Subscribing to pressure characteristic ..."));
-  if (!pressCharacteristic) {
-    Serial.println(F("no pressure characteristic found!"));
-    peripheral.disconnect();
-    return;
-  } else if (!pressCharacteristic.canSubscribe()) {
-    Serial.println("pressure characteristic is not subscribable!");
-    peripheral.disconnect();
-    return;
-  } else if (!pressCharacteristic.subscribe()) {
-    Serial.println(F("subscription failed!"));
-    peripheral.disconnect();
-    return;
-  } else {
-    Serial.println(F("Subscribed."));
-    Serial.println();
-  }
-
-  while (peripheral.connected()) {
-    // wait for serial command
-    while (Serial.available() == 0);
-    String tag = Serial.readStringUntil('\n');
-    delay(50);
-
-    // check if sensor values are updated
-    if (tempCharacteristic.valueUpdated()
-        && humidCharacteristic.valueUpdated()
-        && pressCharacteristic.valueUpdated()) {
-      // read the values, MTU is 23 bytes
-      char temp_buffer[4];    // 32 bit float (4 byte array)
-      char humid_buffer[4];   // 32 bit float (4 byte array)
-      char press_buffer[4];   // 32 bit float (4 byte array)
-
-      tempCharacteristic.readValue(temp_buffer, 4);
-      humidCharacteristic.readValue(humid_buffer, 4);
-      pressCharacteristic.readValue(press_buffer, 4);
-
-      // convert byte arrays to floats
-      float temp = *(float *)&temp_buffer;
-      float humid = *(float *)&humid_buffer;
-      float pressure = *(float *)&press_buffer;
-
-      // and print to serial
-      Serial.println("timestamp");
-      Serial.print(tag); Serial.println("_relhumid");
-      Serial.println(humid);
-      Serial.println("%");
-      Serial.print(tag); Serial.println("_temp");
-      Serial.println(temp);
-      Serial.println("degC");
-      Serial.print(tag); Serial.println("_pressure");
-      Serial.println(pressure);
-      Serial.println("Pa");
-      Serial.println();
-    }
-  }
 }
 
 void loop() {
-
-  // check if a peripheral has been discovered
+  // check if peripheral has been discovered
   BLEDevice peripheral = BLE.available();
 
-  if (peripheral)
-  {
-    // found a peripheral
-    Serial.println(F("Device Found: "));
-    Serial.print(F("Address - "));
-    Serial.println(peripheral.address());
-    Serial.print(F("Device name - "));
-    Serial.print(F(" '"));
+  // found peripheral, stop scanning and listen for data
+  if (peripheral) {
+    Serial.print("Found peripheral : '");
     Serial.print(peripheral.localName());
-    Serial.print(F("' "));
-    Serial.println();
+    Serial.println("'");
 
-    // stop scanning
+    if (peripheral.localName() != "lab_test") {
+      return;
+    }
+
     BLE.stopScan();
 
-    // start monitoring
-    get_data_and_print(peripheral);
-    // periperal disconnected, start scanning again
-    Serial.println("Peripheral disconnected");
-    Serial.println();
-    Serial.print("Re-Scanning for UUID: '");
-    Serial.print(service_UUID);
-    Serial.println("' ...");
+    listen_for_monitor(peripheral);
+
+    Serial.println("Rescanning for UUID");
+    // peripheral has disconnected, start scanning again
+    BLE.scanForUuid(serviceUUID);
+  }
+}
+
+void listen_for_monitor(BLEDevice peripheral) {
+  // connect to peripheral
+  Serial.println("Connecting ...");
+  if (peripheral.connect()) {
+    Serial.println("Connected.");
+  }
+  else {
+    Serial.println("Failed to connect ...");
+    return;
+  }
+
+  // discover attributes
+  Serial.println("Discovering attributes ...");
+  if (peripheral.discoverAttributes()) {
+    Serial.println("Attributes discovered");
+  } else {
+    Serial.println("Attribute discovery failed!");
+    peripheral.disconnect();
+    return;
+  }
+
+  BLECharacteristic sensorsCharacteristic = peripheral.characteristic(sensorsUUID);
+
+  if (!sensorsCharacteristic.subscribe()) {
+    Serial.println(F("subscription failed!"));
+    peripheral.disconnect();
+    return;
+  } else {
+    Serial.println(F("Subscribed."));
     Serial.println();
   }
-  // periperal disconnected, start scanning again
-  BLE.scanForUuid("19B10000-E8F2-537E-4F6C-D104768A1214");
+  
+  // loop while connected to peripheral
+  while (peripheral.connected()) {
+    if (sensorsCharacteristic.valueUpdated()) {
+      // read the data from the sensors characteristic as 3xfloat32 for each sensor value
+      float humidity, temperature, pressure;
+      String tag = "";
+      read_sensorsCharacteristic(sensorsCharacteristic, humidity, temperature, pressure, tag);
 
+      // and print to serial
+      Serial.print(F("central tag   : '"));
+      Serial.print(tag);
+      Serial.println("'");
+
+      Serial.print(F("humidity      : "));
+      Serial.print(humidity);
+      Serial.println(F(" %"));
+
+      Serial.print(F("temperature   : "));
+      Serial.print(temperature);
+      Serial.println(F(" degC"));
+
+      Serial.print(F("pressure      : "));
+      Serial.print(pressure);
+      Serial.println(F(" Pa"));
+    }
+  }
+  Serial.println("Peripheral disconnected.");
+}
+
+
+void read_sensorsCharacteristic(BLECharacteristic sensorsCharacteristic, float & humidity, float & temperature, float & pressure, String & tag) {
+  /*
+    Function which a characteristic containing a 12 byte array for 3 sensor values
+    and converts the 12 byte array into 3 buffers of length 4 bytes.
+
+    - Humidity     (byte 0-3)
+    - Temperature  (byte 4-7)
+    - Pressure     (byte 8-11)
+
+    The buffers are then converted from the byte array
+    to a human-readable 32-bit floating point.
+  */
+  // read 23 bytes (11 byte ASCII and 3 x float32) from the sensor characteristic into an array
+  char sensors_data [23];
+  sensorsCharacteristic.readValue(sensors_data, 23);
+
+  // first 11 bytes for ASCII string for the tag
+  // next 4 bytes for humidity, next 4 bytes for temperature
+  // last 4 for pressure float32s
+  char tag_buffer[11];
+  char humid_buffer[4];
+  char temp_buffer[4];
+  char press_buffer[4];
+  for (int i = 0; i < 11; ++i) {
+    tag_buffer[i] = sensors_data[i];
+  }
+  for (int i = 0; i < 4; ++i) {
+    humid_buffer[i] = sensors_data[i + 11];
+    temp_buffer[i] = sensors_data[i + 15];
+    press_buffer[i] = sensors_data[i + 19];
+  }
+
+  // convert from bytes to readable floats (%, degC, Pa)
+  tag = String(tag_buffer);
+  humidity = *(float *)&humid_buffer;
+  temperature = *(float *)&temp_buffer;
+  pressure = *(float *)&press_buffer;
 }
