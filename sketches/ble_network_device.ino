@@ -1,3 +1,5 @@
+// BLE NETWORK DEVICE TEST
+
 // libraries
 #include <ArduinoBLE.h>       // Bluetooth LE Library
 #include <Wire.h>             // I2C Library
