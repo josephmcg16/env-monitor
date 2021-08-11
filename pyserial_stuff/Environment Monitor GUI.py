@@ -191,6 +191,10 @@ class MonitorGUI:
         self.logger_frame.grid(row=1, column=3)
 
     def close_window(self):
+        if self.monitor.ble:
+            self.monitor.ble_disconnect()
+        self.monitor.stop_logger()
+        self.monitor.close_port()
         self.window.withdraw()
         self.root.deiconify()
 
@@ -229,6 +233,7 @@ class MonitorGUI:
             # can't connect, no peripheral selected
             messagebox.showwarning("BLE Warning", "Please Select a Peripheral")
             return
+
         # start connecting to ble in the background
         self.status_label.destroy()
         self.status_label = status_bar(self.window, f"Connecting to {self.peripheral.get()}")
