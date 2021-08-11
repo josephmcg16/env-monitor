@@ -5,6 +5,8 @@
   Author: Joseph McGovern
 
   Reads data from an environment monitor over BLE (peripheral) and prints to Serial.
+  See the BLE examples for something similar:
+  https://www.arduino.cc/en/Reference/ArduinoBLE
 
   Data recieved over GATT protocol.
 
@@ -18,8 +20,8 @@
 
 */
 
-#include <ArduinoBLE.h>
-#include "lcdgfx.h"           // OLED Library
+#include <ArduinoBLE.h>       // BLE library https://www.arduino.cc/en/Reference/ArduinoBLE
+#include "lcdgfx.h"           // OLED Library https://github.com/lexus2k/lcdgfx#key-features
 
 #define deviceLocalName "Arduino_CENTRAL"
 
@@ -28,6 +30,8 @@
 #define sensorsUUID "19B10001-E8F2-537E-4F6C-D104768A1214"
 
 #define resetPin 7
+
+#define delim '\t'
 
 // Constructors
 DisplaySH1106_128x64_I2C display(-1); // OLED SH1106 Display (I2C slave address 0x3C by default)
@@ -141,18 +145,21 @@ void listen_for_monitor(BLEDevice peripheral) {
 
       // print to Serial
       String sensor_names = tag;  // string with the sensor names
-      sensor_names += "_humidity,";
+      sensor_names += "_humidity";
+      sensor_names += delim;
       sensor_names += tag;
-      sensor_names += "_temperature,";
+      sensor_names += "_temperature";
+      sensor_names += delim;
       sensor_names += tag;
       sensor_names += "_pressure";
       String data_csv = String(humidity);  // string with sensor CSVs
-      data_csv += ",";
-      data_csv += String(temperature);
-      data_csv += ",";
-      data_csv += String(pressure);
+      data += delim;
+      data += String(temperature);
+      data += delim;
+      data += String(pressure);
+      Serial.println(peripheral.localName());
       Serial.println(sensor_names);
-      Serial.println(data_csv);
+      Serial.println(data);
     }
   }
   display.printFixed(0, 48, "BLE Disconnected", STYLE_NORMAL);
