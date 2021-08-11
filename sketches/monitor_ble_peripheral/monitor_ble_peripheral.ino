@@ -1,63 +1,173 @@
 /*
+ * --------------------------------------------------------------------------
   Environment Monitor BLE Peripheral
 
   Author: Joseph McGovern, 2021 Saltire Scholar Intern
+  ------------------------------------------------------------------------------
+  THis is the sketch BLE Peripheral which recieves data from sensors over 
+  I2C communication bus
 
-  BLE Peripheral which recieves data from sensors over I2C bus
-
-  Prints to an LCD Display and backups to SD card.
-  SD card can be removed during runtime, but to avoid issues;
+  Prints to an OLED Display and backups to SD card.
+  SD card can be removed during runtime; but to avoid issues,
   shutdown the device before removing the SD card.
 
+  SD card creates new file with headers for each sensor each day.
+  Can change the delimiter from a comma (,) i.e. .csv 
+  to a tab (/t) i.e. tsv (.txt).
+  SD lib is limited to dos 8.3 filename format, 
+  i.e. filename can only be 8 chars
+
+  ------------------------------------------------------------------------------
+  HYT 939 I2C Humidity/ Temperature Sensor
+  ------------------------------------------------------------------------------
+  Recieves data over I2C protocol.
+  Slave address and command registers defined in the application note:
+  https://www.servoflo.com/images/PDF/hyt-manual.pdf
+  
+  This datasheet is a bit fried to understand, but (using the Wire library) you 
+  just write a command to the I2C slave address (0x28) saying you want data 
+  (write a value of 0x80) then request 4 bytes of data the use some bit 
+  manipulation and maths to get decimal numbers (floats). 
+  Neat example on pages 13-14 of the application note.
+  ------------------------------------------------------------------------------
+  Barometer 3 Click (Infineon DPS368 I2C Barometric Pressure Sensor)
+  ------------------------------------------------------------------------------
+  Much easier to setup than the HYT939. Infineon offers a coding library for
+  Arduino boards:
+  https://github.com/Infineon/DPS368-Library-Arduino
+
+  Just make an instance of the library class and call certain methods to get
+  data (example codes available with the library).
+
+  I had to comment off a line in the library or else I got an error.
+  Since this code only uses the I2C bus for this sensor, comment off this line:
+  in the DpsClass.cpp file (Dps368 library > src) 
+  - this should be in the libraries folder next to where the sketches are saved. 
+  Then ctrl-f search for "setDataMode".
+
+  Comment off *m_spibus->setDataMode(SPI_MODE3;*
+
+  (it should look like this)
+  // Init bus
+  m_spibus->begin();
+  //m_spibus->setDataMode(SPI_MODE3);
+  ------------------------------------------------------------------------------
+  microSD Card for Adalogger Featherwing (SPI)
+  ------------------------------------------------------------------------------
+  Uses the 4 wire SPI protocol (MOSI, MISO, SCK and Chip Select).
+
+  Quite easy to setup, just uses the Arduino SD library. Need to define the 
+  Chip Select Pin (it's on D-10 for my setup).
+  Docs for the library: https://www.arduino.cc/en/Reference/SD
+  (Bunch of example codes available).
+  
+  SD card creates new file with headers for each sensor each day.
+  Can change the delimiter from a comma (,) i.e. .csv 
+  to a tab (/t) i.e. tsv (.txt).
+  SD lib is limited to dos 8.3 filename format, 
+  i.e. filename can only be 8 chars.
+
+  I also call SD.begin() if there's an error with the SD card on each loop
+  iteration. This means someone can remove the card then pop it back in and the 
+  card can still be used without restarting the Arduino.
+  ------------------------------------------------------------------------------
+  Real Time Clock (RTC) on the Adalogger Featherwing (PCF8523)
+  ------------------------------------------------------------------------------
+  Again, this uses a coding library: 
+  https://github.com/adafruit/RTClib
+  (or you can just search RTClib in th Arduino library manager and it's the 
+  Adafruit one).
+
+  This...
+  https://cdn-learn.adafruit.com/downloads/pdf/adafruit-adalogger-featherwing.pdf
+  has some handy tutorials for the RTC and SD card.
+  ------------------------------------------------------------------------------
+  OLED Screen
+  ------------------------------------------------------------------------------
+  This was quite tricky to setup. I used an OLED with the SH1106 driver,
+  but the SSD1306 is probably a better shout. Adafruit has a library for that:
+  https://github.com/adafruit/Adafruit_SSD1306
+
+  but I ended up using this library:
+  https://github.com/lexus2k/lcdgfx#key-features
+  as it was the only one I could find to work with my Nano33BLE.
+  Might not work for other boards. It's just trial and error to get one that 
+  works.
+  ------------------------------------------------------------------------------
+  BLE STUFF
+  ------------------------------------------------------------------------------
   Writes data to a Characteristic on a custom Service of a GATT BLE Protocol
 
-  Writes to Characteristic 23 bytes of data ~every 3 seconds.
+  Writes to Characteristic 23 bytes of data whenever the data is available
+  (would be nice to change this to only write when there is a significant
+  change in the value...)
 
-  11 bytes represent device tag (peripheralLocalName var)
+  11 bytes represent device tag (peripheralLocalName variable) 
+  in ASCII encoding.
+  https://www.binaryhexconverter.com/hex-to-ascii-text-converter
 
-  The other 3 x 4 bytes correspond to 32 bit floating points.
+  The other 3 x 4 bytes correspond to 32 bit floating points (little endian).
+  https://www.scadacore.com/tools/programming-calculators/online-hex-converter/
+  ______________________________________________________________________________
+  BLE SensorsCharacteristic EXAMPLE:
+  23 bytes  - hexadecimal (0xNumber) basing: 
+  0x6C-61-62-5F-31-0-0-0-0-0-0--61-3B-48-42-F7-CE-CD-41-D2-AE-C7-47
+
+  First 11 bytes:  0x6C-61-62-5F-31-0-0-0-0-0-0 -> ASCII: "lab_1"
+
+  Next 3x4bytes: 0x61-3B-48-42 -> 50.0579872 (the humidity reading)
+                 0xF7-CE-CD-41 -> 25.7260571 (the temperature reading)
+                 0xD2-AE-C7-47 -> 102237.641 (the pressure reading)              
+  ------------------------------------------------------------------------------
 */
 
-// libraries
-#include <ArduinoBLE.h>       // Bluetooth LE Library
-#include <Wire.h>             // I2C Library
-#include <SD.h>               // SD Card Library
-#include <Dps368.h>           // Dps368 I2C Library
-#include <RTClib.h>           // RTC library
-#include "lcdgfx.h"           // OLED Library
+// libraries https://learn.adafruit.com/adafruit-all-about-arduino-libraries-install-use)
+#include <ArduinoBLE.h>       // Bluetooth LE Library https://www.arduino.cc/en/Reference/ArduinoBLE
+#include <Wire.h>             // I2C Library https://www.arduino.cc/en/Reference/Wire
+#include <SD.h>               // SD Card Library https://www.arduino.cc/en/Reference/SD
+#include <Dps368.h>           // Dps368 I2C Library https://github.com/Infineon/DPS368-Library-Arduino
+#include <RTClib.h>           // RTC library https://github.com/adafruit/RTClib
+#include "lcdgfx.h"           // OLED Library https://github.com/lexus2k/lcdgfx#key-features
 #include "lcdgfx_gui.h"       // "
 #include "Logo.h"             // Header file containing the Coherent Logo
+// I followed the lcdgfx library examples and used this to get the array: https://javl.github.io/image2cpp/
 
 // i2c slave addresses
 #define hyt_Addr 0x28         // temp, humid sensor I2C slave address
 #define dps_Addr 0x77         // pressure sensor I2C slave address
 
-// SD card reader chip select pin
+// SD card reader (SPI) chip select pin
 #define CSPin 10
 
-// Constructors
+// Constructors (library classes)
 Dps368 Dps368PressSensor = Dps368();  // dps368 (pressure) sensor
 RTC_PCF8523 rtc;                      // Adalogger RTC
-DisplaySH1106_128x64_I2C display(-1); // OLED SH1106 Display (I2C slave address 0x3C by default)
+DisplaySH1106_128x64_I2C display(-1); // OLED SH1106 Display (I2C slave address 0x3C by default) (-1 means there's no reset pin).
 
 
 // Bluetooth LE
-#define serviceUUID "19B10000-E8F2-537E-4F6C-D104768A1214"                                  // custom 128-bit UUID
-#define sensorsUUID "19B10001-E8F2-537E-4F6C-D104768A1214"
+#define monitorServiceUUID "19B10000-E8F2-537E-4F6C-D104768A1214"                           // custom 128-bit UUID for the GATT protocol
+#define sensorsCharacteristicUUID "19B10001-E8F2-537E-4F6C-D104768A1214"
 BLEService monitorService(serviceUUID);                                                     // monitor GATT service
 BLECharacteristic sensorsCharacteristic(sensorsUUID, BLENotify , 23);                       // sensors characteristic
-char peripheralLocalName[9] = "DEFAULT";                                                    // BLE device name
-int connectedBLE = 0;;
+char peripheralLocalName[9] = "DEFAULT";                                                    // BLE device name ('DEFAULT' if SD card is not available on startup)
+int connectedBLE = 0;                                                                       // BLE disconnected on startup
 
-// Push button for OLED
+// Push button for OLED (see the Digital -> Button example for how this works)
 int buttonStatus = 1;  // button initially held high
 int screen = 0;        // first screen is the humidity display
 #define buttonPin 2    // button I/O Pin
 
 // Battery Voltage Pin
 #define batPin A0
+
+#define delim '\t'  // delimeter for files. ',' for .csv, '\t' for .tsv
+// change filename ending to .csv in void sd_card_backup if desired.
+
 /*
     Event handler functions, handle peripheral reaction when central connects/ disconnects
+    Means I don't need a while loop and if statement to clunk up the code. I can just check
+    each loop iteration using BLE.poll()
 */
 void ConnectHandler(BLEDevice central) {
   // central connected event handler
@@ -78,9 +188,10 @@ void DisconnectHandler(BLEDevice central) {
 }
 
 void setup() {
-  // init serial
-  Serial.begin(9600);
-  // while (!Serial);
+  // initialize (init) serial
+  Serial.begin(9600);  // 9600 baud rate
+  // while (!Serial);  
+  // uncomment this if you want the device to wait for serial port to open to start up
 
   // init i2c
   Wire.begin();
@@ -89,7 +200,8 @@ void setup() {
   // init push button
   pinMode(buttonPin, INPUT_PULLUP);
 
-  // init OLED and print logo
+  // init OLED and print logo for 3 seconds
+  // see the library examples to see how this works :)
   display.begin();
   display.fill(0x00);
   display.setFixedFont(ssd1306xled_font8x16);
@@ -117,6 +229,8 @@ void setup() {
 
   }
   else {  // sd available, get the saved name
+    // function that reads a text file saved to the SD card to get the last device name
+    // if the SD card isn't available on startup the name is 'DEFAULT'.
     get_sd_peripheralLocalName(peripheralLocalName);
   }
 
@@ -124,9 +238,9 @@ void setup() {
   if (!BLE.begin()) {
     display.clear();
     display.printFixed(0, 0, "BLE init failure ...", STYLE_BOLD);
-    while (!BLE.begin());
+    while (!BLE.begin());  // waits for BLE to startup if it fails on setup
   }
-
+  // set the Event Handlers I defined earlier
   BLE.setEventHandler(BLEConnected, ConnectHandler);
   BLE.setEventHandler(BLEDisconnected, DisconnectHandler);
 
@@ -145,8 +259,61 @@ void setup() {
   BLE.advertise();
 }
 
+
+
+
+
+// loop function
 void loop() {
-  BLE.poll();
+  BLE.poll();  // check if the BLE events took place
+
+  /*
+   * This is the infinite loop that runs over and over while the device is on.
+   * 
+   * Calls a bunch of functions I made:
+   * ---------------------------------------------------------------------------
+   * Function                   Description
+   * ---------------------------------------------------------------------------
+   * update_peripheralLocalName Checks the serial comms to see if any data is
+   *                            available. Converts this data (bytes) into an
+   *                            ASCII encoded character array.
+   *                            Is a maximum of 8 characters long.
+   *                            A null character ('\0') is added after each 
+   *                            character othrwise some weird characters print 
+   *                            to the OLED.
+   *                            Make sure the written data has no newline 
+   *                            character.
+   * 
+   * get_sensors_data           Gets the I2C data from the sensors using the
+   *                            Wire library and Dps368 library class.
+   *                            These values are saved as a 32-bit float.
+   *
+   * write_to_BLE               Updates the value of the sensorsCharacteristi.
+   *                            If this code is being used for an IOT cloud 
+   *                            application this function could be replaced 
+   *                            with the WiFi stuff? 
+   *                            e.g. void write_to_iot(data)
+   *                            
+   * OLED_screens_print         Converts all the floats into ASCII character 
+   *                            arrays and prints to the OLED. Bunch of 
+   *                            different screens available. The screen 
+   *                            switches depending on a value which 
+   *                            increases when a button state changes. 
+   *                            This resets to zero once the final screen is 
+   *                            reached.
+   * 
+   * sd_card_backup             Writes the data to a file on the SD card.
+   *                            Filename is todays date 'DDMMYYY' 
+   *                            (limited to 8 chars). Filename ending is 
+   *                            .txt by default. Prints sensor data 
+   *                            seperated by tabs ('\t'). Files are written 
+   *                            to folders with the peripheralLocalName. 
+   *                            If the file does not exist, a new fileis made 
+   *                            with headers corresponding to timestamp and 
+   *                            the sensor names.
+   * ---------------------------------------------------------------------------
+    */
+    
   // check for new device name
   update_peripheralLocalName(peripheralLocalName);
   // sensor values (3xfloat32)
@@ -163,7 +330,14 @@ void loop() {
 }
 
 
-// includes address pointers
+
+
+
+
+/*
+ * All the functions...
+ */
+ 
 void get_sensors_data(float & humidity, float & temperature, float & pressure) {
   // send normal mode command to hyt939 sensor
   Wire.beginTransmission(hyt_Addr);
@@ -181,7 +355,8 @@ void get_sensors_data(float & humidity, float & temperature, float & pressure) {
     }
   }
   else {
-    Serial.println("Hyt939 I2C Error");
+    display.clear();
+    display.printFixed(0, 0, "HYT939 I2C Error", STYLE_BOLD);
     while (1);
   }
 
@@ -194,32 +369,40 @@ void get_sensors_data(float & humidity, float & temperature, float & pressure) {
   uint8_t ret = Dps368PressSensor.measurePressureOnce(pressure, oversampling);
   if (ret != 0) {
     // Something has went wrong
-    Serial.println("Dps 368 I2C error");
+    display.clear();
+    display.printFixed(0, 0, "DPS368 I2C Error", STYLE_BOLD);
     while (1);
   }
 }
 
 void write_to_BLE(BLECharacteristic sensorsCharacteristic, float humidity, float temperature, float pressure) {
   // combine the floats into one 12 byte character array
-  byte sensors_data [23];
+  byte sensors_data [23];  // 23 byte array for the BLE characteristic data
   byte tag [11];
   for (int i = 0; i < 8; ++i) {
-    tag [i] = byte(peripheralLocalName[i]);
+    tag [i] = byte(peripheralLocalName[i]);  // the device name data (converts ascii to bytes)
   }
   for (int i = 8; i < 11; ++i) {
-    tag[i] = 0;
+    tag[i] = 0;  // tag is limited to 8 characters, add null char for any other characters here.
   }
+  
+  // make the floats into 4 bytes
   byte * humid_bytes = (byte *) &humidity;
   byte * temp_bytes = (byte *) &temperature;
   byte * press_bytes = (byte *) &pressure;
+
+  // append the device name to the BLE characteristic data buffer
   for (int i = 0; i < 11; ++i) {
     sensors_data[i] = tag[i];
   }
+  // append the sensors data to the BLE characteristic data buffer
   for (int i = 0; i < 4; ++i) {
     sensors_data[i + 11] = humid_bytes[i];
     sensors_data[i + 15] = temp_bytes[i];
     sensors_data[i + 19] = press_bytes[i];
   }
+
+  // print the raw values (for debugging)
   //  Serial.print(sensors_data[0], HEX);
   //  for (int i = 1; i < 22; ++i) {
   //    // print BLE sensor data for debugging
@@ -227,14 +410,17 @@ void write_to_BLE(BLECharacteristic sensorsCharacteristic, float humidity, float
   //    Serial.print(sensors_data[i], HEX);
   //  }
   //  Serial.println();
+
+  // write the data to the ble characteritic
   sensorsCharacteristic.writeValue(sensors_data, 23);
 }
 
 void OLED_screens_print(float humidity, float temperature, float pressure) {
-  float batVolt = analogRead(batPin) * 5.0/1023;  // get current battery voltage
+  float batVolt = analogRead(batPin) * 5.0 / 1023; // get current battery voltage
   int x_coord;
   char humid_char[8], temp_char[8], press_char[10], batVolt_char[8];
 
+  // make the floats into ascii char arrays for the OLED
   String(humidity).toCharArray(humid_char, 8);
   String(temperature).toCharArray(temp_char, 8);
   String(pressure).toCharArray(press_char, 10);
@@ -243,15 +429,15 @@ void OLED_screens_print(float humidity, float temperature, float pressure) {
   int pinValue = digitalRead(buttonPin);
   if (buttonStatus != pinValue) {
     screen++;
-    display.clear();  // refresh the screen
+    display.clear();  // refresh the screen if the button is pressed
     if (screen > 4) {
-      screen = 0;
+      screen = 0;  // reaches final screen, go back to the start
     }
   }
 
   // check BLE status and print to the OLED
   if (connectedBLE) {
-    display.printFixed(0, 48, "  BLE Connected ", STYLE_NORMAL);
+    display.printFixed(0, 48, "  BLE Connected ", STYLE_NORMAL);  // added spaces here as OLED will not wipe what is already there.
   }
   else {
     display.printFixed(0, 48, "BLE Disconnected", STYLE_NORMAL);
@@ -290,20 +476,23 @@ void OLED_screens_print(float humidity, float temperature, float pressure) {
 
   // print to Serial as well
   String sensor_names = peripheralLocalName;  // string with the sensor names
-  sensor_names += "_humidity,";
+  sensor_names += "_humidity";
+  sensor_names += delim;
   sensor_names += peripheralLocalName;
-  sensor_names += "_temperature,";
+  sensor_names += "_temperature";
+  sensor_names += delim;
   sensor_names += peripheralLocalName;
   sensor_names += "_pressure";
-  String data_csv = String(humidity);  // string with sensor CSVs
-  data_csv += ",";
-  data_csv += String(temperature);
-  data_csv += ",";
-  data_csv += String(pressure);
+  String data = String(humidity);  // string with sensor CSVs
+  data += delim;
+  data += String(temperature);
+  data += delim;
+  data += String(pressure);
+  Serial.println(peripheralLocalName);
   Serial.println(sensor_names);
-  Serial.println(data_csv);
+  Serial.println(data);
 
-  // delay(50);  // delay for next button press
+  // delay(50);  // delay for next button press (might be needed?)
 }
 
 void sd_card_backup(float humidity, float temperature, float pressure) {
@@ -312,7 +501,7 @@ void sd_card_backup(float humidity, float temperature, float pressure) {
   String directory = peripheralLocalName;
   // append the directory to the filename path
   String filename = directory;
-  filename += "/";
+  filename += "/";  // += is used to append character to an Arduino::String
   // append the current date as the filename
   // e.g: DDMMYYYY (8 chars)
   DateTime now = rtc.now();
@@ -320,17 +509,19 @@ void sd_card_backup(float humidity, float temperature, float pressure) {
   String month_now = String(now.month(), DEC);
   String year_now = String(now.year(), DEC);
   if (day_now.length() != 2) {
-    filename += "0";
+    filename += "0"; // check the comment below, same thing
   }
   filename += day_now;
   if (month_now.length() != 2) {
-    filename += "0";
+    filename += "0"; // makes it so e.g. Janurary is '01' not '1'.
   }
   filename += String(now.month(), DEC);
   filename += String(now.year(), DEC);
-  // Serial.println(filename);
+  // Serial.println(filename);  // print for debugging
+  
   // filename ending
-  filename += ".csv";
+  filename += ".txt";
+  // filename += ".csv";
 
   // string for the timestamp
   String timestampString = String(now.year(), DEC); timestampString += "/"; timestampString += String(now.month(), DEC);
@@ -339,9 +530,9 @@ void sd_card_backup(float humidity, float temperature, float pressure) {
   timestampString += ":"; timestampString += String(now.second(), DEC);
   // and sensors data
   String dataString = timestampString;
-  dataString += ","; dataString += String(humidity);
-  dataString += ","; dataString += String(temperature);
-  dataString += ","; dataString += String(pressure);
+  dataString += delim; dataString += String(humidity);
+  dataString += delim; dataString += String(temperature);
+  dataString += delim; dataString += String(pressure);
 
   // write to the SD card file
   if (!SD.exists(filename)) {
@@ -350,11 +541,14 @@ void sd_card_backup(float humidity, float temperature, float pressure) {
     if (dataFile) {
       display.printFixed(12, 32, "             ", STYLE_NORMAL);  // remove error from the OLED
       // if the file does not yet exist, write the headers
-      String headers = "timestamp, ";
+      String headers = "timestamp";
+      headers += delim;
       headers += peripheralLocalName;
-      headers += "_humidity, ";
+      headers += "_humidity";
+      headers += delim;
       headers += peripheralLocalName;
-      headers += "_temperature, ";
+      headers += "_temperature";
+      headers += delim;
       headers += peripheralLocalName;
       headers += "_pressure";
       dataFile.println(headers);
@@ -387,6 +581,8 @@ void sd_card_backup(float humidity, float temperature, float pressure) {
 }
 
 void update_peripheralLocalName(char peripheralLocalName[9]) {
+  // this code is a bit fried, probably a better way to do this.
+  // I made this work through trial and error.
   byte buff [8] = "";
   int i = 0;
   while (Serial.available()) {
@@ -451,6 +647,7 @@ void get_sd_peripheralLocalName(char peripheralLocalName[9]) {
       }
       else {
         configFile.read();  // incase someone changes the file manually. Prevent SD card error later.
+        // again, got this to work through trial and error.
       }
     }
     if (buff[0] != 0) {  // file wasn't blank
@@ -458,7 +655,7 @@ void get_sd_peripheralLocalName(char peripheralLocalName[9]) {
         peripheralLocalName[i] = (char)buff[i];
         peripheralLocalName[i + 1] = '\0'; // Add a NULL after each character
       }
-      peripheralLocalName[9] = '/0';
+      peripheralLocalName[9] = '/0';  // add null at the end too, needed for ascii c++-code.
     }
   }
   else {
