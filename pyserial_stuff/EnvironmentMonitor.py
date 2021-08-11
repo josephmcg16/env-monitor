@@ -7,7 +7,7 @@ Script for the Arduino Environment Data-logger when directly connected to a PC v
 =====================================================================================================
 Class Environment Monitor
 =====================================================================================================
-Arduino with nrf52 BLE MCU
+Arduino with nrf52 series BLE-enabled MCU
 
 Device acts either as a BLE central or BLE peripheral.
 BLE Central acts as a client to peripheral's i2c sensor data over a custom BLE GATT Characteristic.
@@ -18,7 +18,7 @@ Central detects to first discovered peripheral advertising with the sensorsUUID.
 
 Sensor data at each timestamp is logged to a specific directory each day.
 Subdirectory is made when a new device is logged.
-E.g. 'Arduino/01-08-2021.csv'
+E.g. 'Arduino/01-08-2021.txt'
 
 BLE Central Sketch available at 'L:\ ____.ino'
 BLE Peripheral Sketch available at 'L:\ ____.ino'
@@ -26,7 +26,7 @@ BLE Peripheral Sketch available at 'L:\ ____.ino'
 ======================       ========================================================================
 Attribute                    Description
 ======================       ========================================================================
-device_name                  BLE advertised local name, also used in making .csv <headers>.
+device_name                  BLE advertised local name, also used in making tsv <headers>.
                              8 chars max.
 
 comport                      Selected port of the wired logger/ BLE central
@@ -41,76 +41,95 @@ ble_connected                True if a ble central is connected to the device, F
 ======================       ========================================================================
 Method                       Description
 ======================       ========================================================================
-restart                      Closes and re-opens the serial COM port
+open_port                    Opens the serial port
 
-log_to_directory             Starts .csv data logging to user specified <path>. Makes a new directory
+close_port                   Closes the serial port
+
+restart_port                 Restarts the serial port (close then open)
+
+log_to_directory             Starts tsv data logging to user specified <path>. Makes a new directory
                              for a new device_name and a new file each day.
-                             E.g. 'path/device_name/YYYY-MM-DD.csv'
+                             E.g. 'path/device_name/YYYY-MM-DD.txt'
                              loop runs in background thread <log_loop>
 
 start_logger                 Sets start keyword to True and starts logging to specified path
 
 stop_logger                  Sets start keyword to False and stops logging
 
+ble_scan                     Scan for n_peripherals available peripherals. Returns a list of
+                             peripherals found. Return [None] if device is not a BLE central.
+
 ble_connect                  Connect to specified available BLE peripheral. Updates device_name to
                              become the same as the peripheral
+
+ble_disconnect               Disconnects from BLE by restarting BLE central device.
 """
-# import libraries
-import serial
+
+import serial  # https://pyserial.readthedocs.io/en/latest/
 from pathlib import Path
 from datetime import date, datetime
 from os import mkdir
 import threading
+import time
 
 
 class EnvironmentMonitor:
 
-    def __init__(self, comport, device_name='Arduino', baud_rate=9600):
-        # check device name suitable for dos 8.3 filename format for the SD card
-        if len(device_name) > 8:
-            device_name = device_name[:8]
-            print("attribute <device_name> must be 8 characters or less.")
-        self.device_name = device_name
+    def __init__(self, comport, baud_rate=9600, delimiter='tsv'):
+
+        # setup pyserial port object
         self.comport = comport
-
-        self.sensors = None  # sensors not defined until device is connected
-
-        # logger start status
-        self.start = False
+        self.ser = serial.Serial(self.comport, baud_rate, timeout=10)
+        self.restart_port()
 
         # init variables
-        self.path = None
-        self.peripherals = [None]  # empty list
-        self.current_data = None
+        self.delimiter = delimiter
 
-        # restart com port
-        self.ser = serial.Serial(comport, baud_rate, timeout=3)
-        self.ser.close()
-        self.ser.open()
+        self.start = False  # logger status (stopped by default)
+        self.timestamp = None  # logger timestamp
+        self.path = None  # logger logger files path
+        self.peripherals = [None]  # list of available ble peripherals
+        self.timestamp = None  # logger timestamp
+        self.current_data = [None]  # logger data-list
 
-        # discover if device is a ble central or not
-        self.ble = monitor_validate(self.ser)
+        # get device info and check if device is an Arduino
+        self.ble, self.device_name = monitor_validate(self.ser)  # device_name is None if device is a BLE central
 
         if self.ble:
-            # ble connected status
+            # device is a BLE central
             self.ble_connected = False
+            self.sensors = None  # sensors not defined until device is connected
         else:
+            # device is a BLE peripheral wired directly to the PC
             self.ble_connected = None
+            self.sensors = get_sensors(self.ser, self.device_name)  # update sensor names
 
-    # close then re-open the COM port
-    def restart(self):
+    # close the COM port
+    def close_port(self):
         self.ser.close()
+
+    # open the COM port
+    def open_port(self):
         self.ser.open()
 
-    # connect to the wired device
-    def wired_connect(self, wired_device_name):
-        self.device_name = wired_device_name
-        write_device_name(self.ser, wired_device_name)
-        print(self.device_name)
-        self.sensors = get_sensors(self.ser, self.device_name)
-        print(self.sensors)
+    # restart the COM port
+    def restart_port(self):
+        self.close_port()
+        time.sleep(1)
+        self.open_port()
 
-    # log monitor sensors data to a .csv
+    # connect to the wired device
+    def write_device_name(self, device_name):
+        self.start = False  # make sure logger has stopped
+
+        device_name = device_name[0:8]  # dos 8.3 filename format for the SD card. 8 chars max
+        self.device_name = device_name  # update new name
+        write_device_name(self.ser, self.device_name)  # write to Serial
+
+        self.ser.flushInput()  # allow device to update the name
+        self.sensors = get_sensors(self.ser, self.device_name)  # update sensor names
+
+    # log monitor sensors data to a tsv .txt
     def log_to_directory(self, path):
         self.path = path
         # check if directory exists
@@ -118,47 +137,72 @@ class EnvironmentMonitor:
         if not Path(directory).exists():
             mkdir(directory)  # make new directory
 
-        # first line of new file is the headers
-        headers = ",".join(self.sensors)
-
-        # logging loop thread
+        # logging loop thread in the background
         def log_loop():
             ser = self.ser
             while self.start:
                 # filename is the selected directory/device name/today's date
-                filename = f"{directory}/{date.today()}.csv"
-                # Check if the logger file exists yet
+                if self.delimiter == 'csv':
+                    separator = ','
+                    filename = f"{directory}/{date.today()}.csv"
+                else:
+                    separator = '\t'
+                    filename = f"{directory}/{date.today()}.txt"
+
+                # write headers if a new file
                 if not Path(filename).exists():
-                    # write headers if a new file
+                    headers = separator.join(self.sensors)
+                    # write headers as first line if a new file
                     file = open(filename, 'w')
-                    file.write("timestamp,")
+                    file.write(f"timestamp{separator}")
                     file.write(f"{headers}\n")
                     file.close()
 
-                file = open(filename, 'a+')
                 line = ser.readline().decode().strip('\r\n')
+
+                # checks for BLE events
+                if self.ble:
+                    if line.split()[0] == "Found":
+                        # connection failed, stop logging
+                        self.ble_connected = False
+                        print("Could not connect")
+                        self.stop_logger()
+                        break
+                    elif line == "Peripheral disconnected." or line == "Rescanning for UUID":
+                        # disconnected, stop logging
+                        self.ble_connected = False
+                        print(f"Disconnected from {self.device_name}")
+                        self.stop_logger()
+                        break
+
                 # make sure line read is the sensor data and not headers
-                if self.device_name in line.split(',')[0]:
+                if self.device_name in line.split('\t')[0]:
                     line = ser.readline().decode().strip('\r\n')
-                elif line == "Peripheral disconnected.":
-                    # stop logging
-                    self.ble_connected = False
-                    print(f'\n{line}')
+
+                ser.readline()  # flush out extra line (sensor names)
+
+                # sensors data
+                self.timestamp = str(datetime.now())  # current timestamp
+                sensors_data_list = line.split('\t')
+                self.current_data = [float(sensor_data) for sensor_data in sensors_data_list]
+                if self.delimiter == 'csv':
+                    file_data = ','.join(sensors_data_list)
+                else:
+                    file_data = line
+                # failsafe for an error when reading the data
+                if 0.00 in self.current_data:
+                    self.ble_disconnect()
                     self.stop_logger()
-                    break
+                    raise BLEDataError("0.00 found in ser.readline. Restart Device.")
 
-                # write PC timestamp to file
-                timestamp = str(datetime.now())
-                file.write(timestamp)  # timestamp
-
-                # write sensors data to file
-                sensor_data = line
-                self.current_data = sensor_data
-                file.write(f",{sensor_data}\n")
+                # write to the file
+                file = open(filename, 'a+')
+                file.write(f'{self.timestamp}{separator}')
+                file.write(f"{file_data}\n")
                 file.close()
+
                 # print data to terminal
-                sensors_data_list = line.split(',')
-                print(f'\n{timestamp}')
+                print(f'\n{self.timestamp}')
                 for i in range(len(self.sensors)):
                     print(f'{self.sensors[i]}: {sensors_data_list[i]}')
 
@@ -166,11 +210,13 @@ class EnvironmentMonitor:
         log_loop_thread = threading.Thread(name='log_loop', target=log_loop)
         log_loop_thread.start()
 
-    # start/ stop logger
+    # start logger
     def stop_logger(self):
+        self.current_data = [None]  # logger stopped, no data available
         self.start = False
         print('logger stopped')
 
+    # stop logger
     def start_logger(self):
         self.start = True
         print("\nlogger started\n")
@@ -179,37 +225,44 @@ class EnvironmentMonitor:
     # scan for ble peripherals advertising with monitor service
     def ble_scan(self, n_peripherals=5):
         if not self.ble:
+            # device is not a BLE central, can't scan
             return None
         else:
             self.peripherals = ble_scan(self.ser, n_peripherals)
             return self.peripherals
 
-    # connect to specific peripheral
+    # connect to specific peripheral (use threading if using method for a GUI)
     def ble_connect(self, peripheral):
         self.device_name = peripheral
         print(f"Connecting to {peripheral} ...")
         ser = self.ser
-        write_device_name(ser, peripheral)
-        line = ser.readline().decode().strip('\r\n')
-        while line != "Connecting ...":
-            # empty buffer till device starts connecting
-            line = ser.readline().decode().strip('\r\n')
+        self.write_device_name(self.device_name)
+        ser.readline().decode().strip('\r\n')
         ser.timeout = 20  # increase timeout to allow for device to connect
+
+        # flush out the connected prints
         ser.readline()  # connected
         ser.readline()  # discovering attributes
         ser.readline()  # attributes discovered
+        ser.readline()   # subscribed
         self.sensors = get_sensors(ser, peripheral)
         print("Connected.")
         self.ble_connected = True
 
+    # restart the Serial port and device starts scanning for peripherals again
+    def ble_disconnect(self):
+        self.stop_logger()
+        self.restart_port()
+        self.ble_connected = False
+
 
 """
-Module-Level Functions for class EnvironmentMonitor __init__
+Module-Level Functions for class EnvironmentMonitor
 ======================       ========================================================================
 Function                     Description
 ======================       ========================================================================
 monitor_validate             Discovers which type of device the port is. Throws exception if Arduino
-                             is not found
+                             is not found. Returns the device name and if it is a ble device or not
                              
 write_device_name            Write 8 byte ASCII to the connected Arduino representing device_name
 
@@ -227,20 +280,27 @@ class ArduinoNotFoundError(ValueError):
     pass
 
 
+class BLEDataError(ValueError):
+    pass
+
+
+# get details on the device, check if device is an Arduino monitor
 def monitor_validate(ser):
     # how long to wait on readline before throwing an error. if error keeps popping up, increase this value
-    ser.timeout = 0.5
-    serial_readline = ser.readline().decode().strip('\r\n')
-    if serial_readline == 'BLE Central':
+    ser.timeout = 2
+    line = ser.readline().decode().strip('\r\n')
+    if line == 'BLE Central':
         # device is a central, set ble to True
         is_ble = True
-    elif serial_readline == '':
+        device_name = None  # need to connect ble first to get peripheral device name
+    elif line == '':
         # ser.readline timeout, throw an error
         raise ArduinoNotFoundError(f"Arduino Environment Monitor not found on {ser.port} (serial read timeout).")
     else:
         # must be a wired Arduino
         is_ble = False
-    return is_ble
+        device_name = line
+    return is_ble, device_name
 
 
 # write new device_name to connected Arduino
@@ -251,15 +311,19 @@ def write_device_name(ser, device_name):
 # get the available sensors
 def get_sensors(ser, device_name):
     ser.timeout = 3
+    ser.readline()
     line = ser.readline().decode().strip('\r\n')
     # make sure headers are read
-    if device_name not in line.split(',')[0]:
-        line = ser.readline().decode().strip('\r\n')
-        print(line)
-    sensors = line.split(',')
+    if device_name not in line.split('\t')[0]:
+        ser.readline()  # skip device_name
+        line = ser.readline().decode().strip('\r\n')  # sensor names
+
+    if len(line.split('\t')) == 1:
+        line = ser.readline().decode().strip('\r\n')  # sensor names
+    sensors = line.split('\t')
     # get list of sensors from line
     for i, sensor in enumerate(sensors):
-        sensors[i] = sensor.replace(',', '')
+        sensors[i] = sensor.replace('\t', '')
     return sensors
 
 
@@ -274,3 +338,4 @@ def ble_scan(ser, n):
         if peripheral_discovered not in peripheral_list:
             peripheral_list.append(peripheral_discovered)
     return peripheral_list
+  
