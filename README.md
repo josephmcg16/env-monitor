@@ -8,7 +8,9 @@ The python codes are also used for easy configuration of the devices. See the ex
 
 The GUI is still a work in progress and the EnvironmentMonitor ble_scan and ble_connect methods are stil a bit buggy. Sometimes the pyserial Serial.write() does not properly write commands to the BLE central Arduino.
 
-Full description of the code in the python files and sketches. I'm planning to add a jupyter notebook with some examples also. 
+Full description of the code in the python files and sketches. I'm planning to add a jupyter notebook with some examples also.
+
+Links to all the libraries found in the monitor_peripheral.ino sketch.
 
 Any questions please email me! :)
 joseph.mcgovern16@gmail.com
