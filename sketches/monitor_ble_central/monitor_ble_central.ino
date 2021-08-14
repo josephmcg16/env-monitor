@@ -1,5 +1,5 @@
 /*
-  Enviromental Monitor central sketch
+  Environmental Monitor central sketch
   19/07/2021
 
   Author: Joseph McGovern
@@ -8,10 +8,10 @@
   See the BLE examples for something similar:
   https://www.arduino.cc/en/Reference/ArduinoBLE
 
-  Data recieved over GATT protocol.
+  Data received over GATT protocol.
 
   GATT protocol contains a GATT service with a characteristic.
-  Characteristic recieves 23 bytes of data.
+  Characteristic receives 23 bytes of data.
 
   11 bytes represent device tag (peripheralLocalName)
 
