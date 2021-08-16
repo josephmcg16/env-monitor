@@ -38,8 +38,6 @@ EnvironmentMonitor module contains a py class which talks to the Arduino using t
 Please see the examples code for more info!
 
 
-Any changes I make will be available on Github (please request collaboration if you
-take this up!
-https://github.com/josephmcg16/env-monitor
+Any changes I make will be available on Github.
 
 All rights reserved by Coherent Inc.
